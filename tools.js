@@ -169,7 +169,14 @@ class MemosTools {
     }
 
     getDefinitions() {
-        return TOOL_DEFINITIONS;
+        return TOOL_DEFINITIONS.map(def => ({
+            type: 'function',
+            function: {
+                name: def.name,
+                description: def.description,
+                parameters: def.parameters
+            }
+        }));
     }
 
     async execute(name, params) {
