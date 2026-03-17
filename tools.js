@@ -241,7 +241,7 @@ class MemosTools {
     async _addMemory({ content }) {
         if (!content) return '错误：未提供要记住的内容 (content)。';
         try {
-            await axios.post(`${this.apiUrl}/add`, { messages: [{ role: 'user', content }], user_id: 'feiniu_default' }, { timeout: 15000 });
+            await axios.post(`${this.apiUrl}/add`, { messages: [{ role: 'user', content }], user_id: 'feiniu_default' }, { timeout: 60000 });
             return `已成功记住: ${content}`;
         } catch (error) {
             return this._connRefused(error) || `添加记忆时出错: ${error.message}`;
