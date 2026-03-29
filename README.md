@@ -2,6 +2,8 @@
 
 让 AI 拥有跨会话的长期记忆能力，基于 [MemOS](../../memos_system/) 后端（Qdrant 向量 + NetworkX 知识图谱 + BM25 混合检索）。
 
+**最近更新（2026-03-29）**：自动注入与 `memos_search_memory` 工具返回的记忆均附带 **日期+时间（秒级）**；详见 [CHANGELOG.md](./CHANGELOG.md)。请与后端仓库 [my-neuro-memos-system](https://github.com/A-night-owl-Rabbit/my-neuro-memos-system) 同日版本配合使用。
+
 ## 快速开始
 
 1. 启动 MemOS 后端：运行 `memos_system/start_memos.bat`（首次启动需等待 Embedding 模型加载）

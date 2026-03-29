@@ -11,7 +11,9 @@ class MemosPlugin extends Plugin {
     async onInit() {
         const cfg = this.context.getPluginFileConfig();
         this.client = new MemosClient(cfg);
-        this.tools = new MemosTools(this.client.apiUrl);
+        this.tools = new MemosTools(this.client.apiUrl, {
+            similarityThreshold: this.client.similarityThreshold
+        });
         this._cfg = cfg;
     }
 
@@ -115,8 +117,9 @@ class MemosPlugin extends Plugin {
                 if (cfg.backend_search.enable_bm25 !== undefined) backendCfg.search.enable_bm25 = cfg.backend_search.enable_bm25;
                 if (cfg.backend_search.bm25_weight !== undefined) backendCfg.search.bm25_weight = cfg.backend_search.bm25_weight;
                 if (cfg.backend_search.enable_graph_query !== undefined) backendCfg.search.enable_graph_query = cfg.backend_search.enable_graph_query;
-                backendCfg.search.similarity_threshold = cfg.similarity_threshold || backendCfg.search.similarity_threshold || 0.5;
             }
+            backendCfg.search = backendCfg.search || {};
+            backendCfg.search.similarity_threshold = cfg.similarity_threshold ?? backendCfg.search.similarity_threshold ?? 0.5;
 
             // Features
             if (cfg.backend_features) {
