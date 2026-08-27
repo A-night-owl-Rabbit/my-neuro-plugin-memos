@@ -6,6 +6,28 @@ const path = require('path');
 
 const BACKEND_CONFIG_PATH = path.join(__dirname, '..', '..', '..', '..', 'memos_system', 'config', 'memos_config.json');
 
+const SHORT_QUERY_FILLERS = new Set([
+    '嗯', '嗯嗯', '嗯哼', '嗯嗯嗯',
+    '啊', '哦', '噢', '唔', '额',
+    '哈', '哈哈', '哈哈哈', '呵呵',
+    '好', '好的', '好哒',
+    '行', '行了', '收到', '知道了', '明白',
+    '对', '是的', '没事', '可以', '哦哦'
+]);
+const SHORT_QUERY_FILLER_CHARS = new Set(['嗯', '啊', '哦', '噢', '唔', '额', '哈', '呵']);
+
+function isShortMemoryQuery(text) {
+    const normalized = String(text || '')
+        .trim()
+        .replace(/[\s\u3000，。、！？：；“”‘’（）【】,.!?;:"'()\[\]…—～~\-]+/g, '');
+    if (!normalized || normalized.length <= 1) return true;
+    if (SHORT_QUERY_FILLERS.has(normalized)) return true;
+    if (normalized.length <= 2 && [...normalized].every(ch => SHORT_QUERY_FILLER_CHARS.has(ch))) {
+        return true;
+    }
+    return false;
+}
+
 class MemosPlugin extends Plugin {
 
     async onInit() {
@@ -40,6 +62,12 @@ class MemosPlugin extends Plugin {
         if (!['voice', 'text'].includes(event.source)) return;
 
         try {
+            if (isShortMemoryQuery(event.text)) {
+                this.context.log('info', `短查询跳过记忆检索: ${String(event.text || '').slice(0, 20)}`);
+                this.context.removeSystemPromptPatch('memos-recall');
+                return;
+            }
+
             const memories = await this.client.search(event.text);
             if (memories.length > 0) {
                 const text = this.client.formatMemoriesForPrompt(memories);
@@ -54,17 +82,63 @@ class MemosPlugin extends Plugin {
 
     async onLLMResponse(response) {
         if (!this.client?.enabled || !this._cfg.auto_save) return;
+        if (response.proactive_internal) return;
 
         const messages = this.context.getMessages();
         const lastUser = [...messages].reverse().find(m => m.role === 'user');
         if (!lastUser) return;
 
+        const contextSummary = this._getCompressedContextSummary(messages);
         this.client.addWithBuffer([
             { role: 'user', content: lastUser.content },
             { role: 'assistant', content: response.text }
-        ]).catch(err => {
+        ], { contextSummary }).catch(err => {
             this.context.log('error', `MemOS 保存对话失败: ${err.message}`);
         });
+    }
+
+    _getCompressedContextSummary(messages = null) {
+        const sourceMessages = Array.isArray(messages) ? messages : this.context.getMessages();
+        for (let i = sourceMessages.length - 1; i >= 0; i--) {
+            const msg = sourceMessages[i];
+            if (!msg || msg.role !== 'assistant') continue;
+
+            const content = this._extractTextContent(msg.content).trim();
+            if (!this._isCompressedSummaryMessage(content)) continue;
+
+            return this._stripSummaryTitle(content);
+        }
+        return null;
+    }
+
+    _isCompressedSummaryMessage(content) {
+        if (!content) return false;
+        return (
+            content.startsWith('[历史折叠索引]') ||
+            content.startsWith('[历史对话总结]') ||
+            content.includes('历史对话总结') ||
+            /^\d{4}-\d{1,2}-\d{1,2}.*?总结[：:]/.test(content)
+        );
+    }
+
+    _stripSummaryTitle(content) {
+        return content
+            .replace(/^\d{4}-\d{1,2}-\d{1,2}.*?总结[：:]/, '')
+            .replace(/^\[历史折叠索引\]\s*/, '')
+            .replace(/^\[历史对话总结\]\s*/, '')
+            .trim();
+    }
+
+    _extractTextContent(content) {
+        if (typeof content === 'string') return content;
+        if (Array.isArray(content)) {
+            return content
+                .filter(part => part && part.type === 'text')
+                .map(part => part.text || '')
+                .join(' ');
+        }
+        if (content === null || content === undefined) return '';
+        return String(content);
     }
 
     getTools() {
@@ -92,21 +166,28 @@ class MemosPlugin extends Plugin {
             // LLM
             if (cfg.backend_llm) {
                 backendCfg.llm = backendCfg.llm || {};
+                const existingConfig = backendCfg.llm.config || {};
+                const resolvedConfig = this._resolveBackendLLMConfig(cfg.backend_llm, existingConfig);
                 backendCfg.llm.config = {
-                    model: cfg.backend_llm.model || backendCfg.llm?.config?.model || '',
-                    api_key: cfg.backend_llm.api_key || backendCfg.llm?.config?.api_key || '',
-                    base_url: cfg.backend_llm.base_url || backendCfg.llm?.config?.base_url || ''
+                    ...existingConfig,
+                    ...resolvedConfig,
+                    max_tokens: cfg.backend_llm.max_tokens ?? existingConfig.max_tokens ?? 8000
                 };
             }
 
             // LLM fallback
             if (cfg.backend_llm_fallback) {
+                const existingFallback = backendCfg.llm_fallback?.config || {};
+                const resolvedFallback = this._resolveBackendLLMConfig(
+                    cfg.backend_llm_fallback,
+                    existingFallback
+                );
                 backendCfg.llm_fallback = {
+                    ...(backendCfg.llm_fallback || {}),
                     enabled: cfg.backend_llm_fallback.enabled !== false,
                     config: {
-                        model: cfg.backend_llm_fallback.model || backendCfg.llm_fallback?.config?.model || '',
-                        api_key: cfg.backend_llm_fallback.api_key || backendCfg.llm_fallback?.config?.api_key || '',
-                        base_url: cfg.backend_llm_fallback.base_url || backendCfg.llm_fallback?.config?.base_url || ''
+                        ...existingFallback,
+                        ...resolvedFallback
                     }
                 };
             }
@@ -146,6 +227,50 @@ class MemosPlugin extends Plugin {
             this.context.log('warn', `同步后端配置失败（不影响运行）: ${err.message}`);
         }
     }
+
+    _resolveBackendLLMConfig(config = {}, existing = {}) {
+        const providerId = String(config.provider_id || '').trim();
+        const providerModelId = providerId ? String(config.model_id || '').trim() : '';
+        let resolved = null;
+
+        if (providerId) {
+            resolved = this.context.resolveLLM(providerId, providerModelId || null);
+        } else if (config.base_url && config.api_key && config.model) {
+            resolved = {
+                api_url: config.base_url,
+                api_key: config.api_key,
+                model: config.model
+            };
+        } else {
+            resolved = this.context.resolveLLM(null, null);
+            if (!resolved?.api_url && global.voiceChat?.API_URL) {
+                resolved = {
+                    api_url: global.voiceChat.API_URL,
+                    api_key: global.voiceChat.API_KEY || '',
+                    model: global.voiceChat.MODEL || ''
+                };
+            }
+        }
+
+        if (!resolved?.api_url || !resolved?.model) {
+            return {
+                model: existing.model || '',
+                api_key: existing.api_key || '',
+                base_url: existing.base_url || ''
+            };
+        }
+
+        return {
+            model: resolved.model,
+            api_key: resolved.api_key || '',
+            base_url: resolved.api_url
+        };
+    }
 }
 
 module.exports = MemosPlugin;
+// 挂成不可枚举：插件加载器会按自有可枚举属性推断插件类，可枚举会让它误选到这个函数
+Object.defineProperty(module.exports, 'isShortMemoryQuery', {
+    value: isShortMemoryQuery,
+    enumerable: false
+});

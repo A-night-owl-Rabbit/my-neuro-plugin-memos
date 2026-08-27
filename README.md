@@ -2,8 +2,6 @@
 
 让 AI 拥有跨会话的长期记忆能力，基于 [MemOS](../../memos_system/) 后端（Qdrant 向量 + NetworkX 知识图谱 + BM25 混合检索）。
 
-**最近更新（2026-03-29）**：自动注入与 `memos_search_memory` 工具返回的记忆均附带 **日期+时间（秒级）**；详见 [CHANGELOG.md](./CHANGELOG.md)。请与后端仓库 [my-neuro-memos-system](https://github.com/A-night-owl-Rabbit/my-neuro-memos-system) 同日版本配合使用。
-
 ## 快速开始
 
 1. 启动 MemOS 后端：运行 `memos_system/start_memos.bat`（首次启动需等待 Embedding 模型加载）
@@ -98,6 +96,19 @@ memos_system\启动WebUI_v3.bat
 ```
 
 可在浏览器中管理所有记忆、查看知识图谱、测试检索效果。
+
+## 常见问题
+
+**Q: 启动后提示 "MemOS 服务不可用"？**
+A: 确保先运行了 `start_memos.bat`，等待 "Embedding 模型已加载" 日志出现后再启动主程序。
+
+**Q: 记忆为什么没有立即保存？**
+A: 插件使用批量保存策略，默认每 5 轮对话保存一次。可在配置中调整保存间隔，或程序退出时会自动保存。
+
+**Q: 修改了后端配置为什么没生效？**
+A: 插件配置页的后端设置会在下次启动时自动同步。如果需要立即生效，请重启 MemOS 后端服务。
+
+---
 
 ## 想邀请你，做这只小牛的“云饲养员”
 

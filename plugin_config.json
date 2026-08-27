@@ -32,7 +32,7 @@
     "description": "记忆检索的最低相似度（0~1），低于此值不注入",
     "type": "float",
     "default": 0.6,
-    "value": 0.6
+    "value": 0.5
   },
   "auto_save": {
     "title": "自动保存对话",
@@ -55,59 +55,102 @@
     "fields": {
       "model": {
         "title": "模型名称",
-        "description": "后端记忆处理使用的 LLM 模型",
+        "description": "后端记忆处理使用的 LLM 模型 旧版手填字段：只有提供商下拉留空、且地址/Key/模型都填全时才生效。建议改用提供商下拉选择。",
         "type": "string",
-        "default": "deepseek-ai/DeepSeek-V3.2",
-        "value": "deepseek-ai/DeepSeek-V3.2"
+        "default": "deepseek-v4-pro",
+        "value": "DeepSeek-V4-pro",
+        "deprecated": true
       },
       "api_key": {
         "title": "API Key",
-        "description": "后端 LLM 的 API 密钥",
+        "description": "后端 LLM 的 API 密钥 旧版手填字段：只有提供商下拉留空、且地址/Key/模型都填全时才生效。建议改用提供商下拉选择。",
         "type": "string",
         "default": "",
-        "value": ""
+        "value": "RsCenterCH-CnBSu5qJDmi2dId35CWytvcRmeXU3H5HcyEpwuhGIBs=",
+        "deprecated": true
       },
       "base_url": {
         "title": "Base URL",
-        "description": "后端 LLM 的 API 地址",
+        "description": "后端 LLM 的 API 地址 旧版手填字段：只有提供商下拉留空、且地址/Key/模型都填全时才生效。建议改用提供商下拉选择。",
         "type": "string",
-        "default": "https://api.siliconflow.cn/v1",
-        "value": "https://api.siliconflow.cn/v1"
+        "default": "https://api.deepseek.com",
+        "value": "https://agentrs.jd.com/api/saas/openai-u/v1",
+        "deprecated": true
+      },
+      "max_tokens": {
+        "title": "输出上限（token）",
+        "description": "后端总结记忆、提取实体时的输出预算，建议 2000~8000。",
+        "type": "int",
+        "default": 8000,
+        "value": 8000
+      },
+      "provider_id": {
+        "title": "MemOS 主模型 提供商",
+        "description": "选了这里就优先用它（提供商在 WebUI「LLM 配置」页管理），旧的手填地址/Key/模型会被忽略；留空时才看旧手填字段，都没填就用主对话模型。",
+        "type": "llm_provider",
+        "default": "",
+        "value": "provider-13"
+      },
+      "model_id": {
+        "title": "MemOS 主模型 模型",
+        "description": "先选提供商，这里才能选它名下的模型；留空就用该提供商的默认模型。换提供商时这里会自动清空。",
+        "type": "llm_model",
+        "provider_field": "backend_llm.provider_id",
+        "default": "",
+        "value": "gemini-3.7-flash-high"
       }
     }
   },
   "backend_llm_fallback": {
     "title": "后端备用 LLM",
-    "description": "主 LLM 失败时的备用模型配置",
+    "description": "上面的后端 LLM 失败时自动切换的备用模型配置",
     "type": "object",
     "fields": {
       "enabled": {
         "title": "启用备用 LLM",
-        "description": "主 LLM 调用失败时自动切换到备用模型",
+        "description": "后端 LLM 调用失败时自动切换到备用模型",
         "type": "bool",
         "default": true,
         "value": true
       },
       "model": {
         "title": "备用模型名称",
-        "description": "备用 LLM 模型",
+        "description": "备用 LLM 模型 旧版手填字段：只有提供商下拉留空、且地址/Key/模型都填全时才生效。建议改用提供商下拉选择。",
         "type": "string",
         "default": "google/gemini-3-pro-preview",
-        "value": "google/gemini-3-pro-preview"
+        "value": "deepseek-v4-pro",
+        "deprecated": true
       },
       "api_key": {
         "title": "备用 API Key",
-        "description": "备用 LLM 的 API 密钥",
+        "description": "备用 LLM 的 API 密钥 旧版手填字段：只有提供商下拉留空、且地址/Key/模型都填全时才生效。建议改用提供商下拉选择。",
         "type": "string",
         "default": "",
-        "value": ""
+        "value": "",
+        "deprecated": true
       },
       "base_url": {
         "title": "备用 Base URL",
-        "description": "备用 LLM 的 API 地址",
+        "description": "备用 LLM 的 API 地址 旧版手填字段：只有提供商下拉留空、且地址/Key/模型都填全时才生效。建议改用提供商下拉选择。",
         "type": "string",
         "default": "https://openrouter.ai/api/v1",
-        "value": "https://openrouter.ai/api/v1"
+        "value": "https://api.deepseek.com",
+        "deprecated": true
+      },
+      "provider_id": {
+        "title": "MemOS 备用模型 提供商",
+        "description": "选了这里就优先用它（提供商在 WebUI「LLM 配置」页管理），旧的手填地址/Key/模型会被忽略；留空时才看旧手填字段，都没填就用主对话模型。",
+        "type": "llm_provider",
+        "default": "",
+        "value": "provider-8"
+      },
+      "model_id": {
+        "title": "MemOS 备用模型 模型",
+        "description": "先选提供商，这里才能选它名下的模型；留空就用该提供商的默认模型。换提供商时这里会自动清空。",
+        "type": "llm_model",
+        "provider_field": "backend_llm_fallback.provider_id",
+        "default": "",
+        "value": ""
       }
     }
   },
@@ -117,22 +160,22 @@
     "type": "object",
     "fields": {
       "enable_bm25": {
-        "title": "启用 BM25 混合检索",
-        "description": "开启向量 + BM25 关键词混合检索，提高召回率",
+        "title": "启用关键词混合检索（BM25）",
+        "description": "在语义相似检索之外再加关键词匹配，两路一起找记忆，找得更全。",
         "type": "bool",
         "default": true,
         "value": true
       },
       "bm25_weight": {
-        "title": "BM25 权重",
-        "description": "BM25 在混合检索中的权重（0~1），向量权重 = 1 - 此值",
+        "title": "关键词检索权重（0~1）",
+        "description": "关键词匹配在混合检索里的占比，语义检索占比等于 1 减去此值。",
         "type": "float",
         "default": 0.3,
         "value": 0.3
       },
       "enable_graph_query": {
-        "title": "启用知识图谱增强",
-        "description": "检索时利用实体关系图谱扩展结果",
+        "title": "启用关系图谱扩展",
+        "description": "检索时顺着人名、地点等实体关系扩展出相关记忆。",
         "type": "bool",
         "default": true,
         "value": true

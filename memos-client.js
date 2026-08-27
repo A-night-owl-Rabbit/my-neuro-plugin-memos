@@ -10,8 +10,23 @@ class MemosClient {
         this.autoSave = pluginConfig.auto_save !== false;
         this.saveInterval = pluginConfig.save_interval ?? 5;
         this.conversationBuffer = [];
+        this.bufferContextSummary = null;
         this.roundCount = 0;
         this._saving = false;
+        this._bufferSummaryVersion = 0;
+        this._savePromise = null;
+    }
+
+    _normalizeContextSummary(summary) {
+        if (typeof summary !== 'string') return null;
+        const text = summary.trim();
+        if (!text) return null;
+
+        const maxChars = 6000;
+        if (text.length <= maxChars) return text;
+
+        const half = Math.floor(maxChars / 2);
+        return `${text.slice(0, half).trimEnd()}\n...[历史摘要过长，已保留开头和结尾]...\n${text.slice(-half).trimStart()}`;
     }
 
     async search(query, topK = null) {
@@ -32,14 +47,27 @@ class MemosClient {
         }
     }
 
-    async add(messages) {
+    async add(messages, options = {}) {
         if (!this.enabled) return { status: 'disabled' };
 
         try {
-            const response = await axios.post(`${this.apiUrl}/add`, {
+            const contextSummary = this._normalizeContextSummary(
+                options.contextSummary ||
+                options.context_summary ||
+                options.historySummary ||
+                options.history_summary ||
+                options.compressedContext ||
+                options.compressed_context
+            );
+            const payload = {
                 messages,
                 user_id: 'feiniu_default'
-            }, { timeout: 10000 });
+            };
+            if (contextSummary) {
+                payload.context_summary = contextSummary;
+            }
+
+            const response = await axios.post(`${this.apiUrl}/add`, payload, { timeout: 10000 });
 
             return response.data;
         } catch (error) {
@@ -48,48 +76,131 @@ class MemosClient {
         }
     }
 
-    async addWithBuffer(messages) {
+    _snapshotBuffer() {
+        return {
+            messages: [...this.conversationBuffer],
+            rounds: this.roundCount,
+            contextSummary: this.bufferContextSummary,
+            summaryVersion: this._bufferSummaryVersion
+        };
+    }
+
+    _commitBufferSnapshot(snapshot) {
+        const prefixMatches = snapshot.messages.every((message, index) =>
+            this.conversationBuffer[index] === message
+        );
+        if (!prefixMatches) return false;
+
+        this.conversationBuffer.splice(0, snapshot.messages.length);
+        this.roundCount = Math.max(0, this.roundCount - snapshot.rounds);
+
+        // Keep a summary when newer messages arrived while the request was in
+        // flight; those messages still belong to the same buffered context.
+        if (this._bufferSummaryVersion === snapshot.summaryVersion &&
+            this.conversationBuffer.length === 0) {
+            this.bufferContextSummary = null;
+        }
+        return true;
+    }
+
+    async _saveBufferSnapshot(status) {
+        const snapshot = this._snapshotBuffer();
+        if (snapshot.messages.length === 0) return { status: 'empty' };
+
+        try {
+            const result = await this.add(snapshot.messages, {
+                contextSummary: snapshot.contextSummary
+            });
+            if (result?.status === 'error') {
+                return {
+                    status: 'error',
+                    message: result.message || 'MemOS 写入失败',
+                    result
+                };
+            }
+
+            if (!this._commitBufferSnapshot(snapshot)) {
+                return {
+                    status: 'error',
+                    message: 'MemOS 保存期间缓冲区发生变化，已保留本地缓冲以便重试',
+                    result
+                };
+            }
+
+            if (status === 'saved') {
+                return {
+                    status: 'saved',
+                    result,
+                    savedRounds: snapshot.rounds,
+                    bufferedRounds: this.roundCount
+                };
+            }
+
+            return {
+                status: 'flushed',
+                message: `已保存 ${snapshot.rounds} 轮对话`,
+                result,
+                bufferedRounds: this.roundCount
+            };
+        } catch (error) {
+            console.error('MemOS 保存失败:', error.message);
+            return { status: 'error', message: error.message, result: null };
+        }
+    }
+
+    _startBufferSave(status) {
+        if (this._savePromise) return this._savePromise;
+
+        this._saving = true;
+        const promise = this._saveBufferSnapshot(status).finally(() => {
+            if (this._savePromise === promise) {
+                this._savePromise = null;
+                this._saving = false;
+            }
+        });
+        this._savePromise = promise;
+        return promise;
+    }
+
+    async addWithBuffer(messages, options = {}) {
         if (!this.enabled) return { status: 'disabled' };
 
         this.conversationBuffer.push(...messages);
         this.roundCount++;
+        const contextSummary = this._normalizeContextSummary(
+            options.contextSummary ||
+            options.context_summary ||
+            options.historySummary ||
+            options.history_summary ||
+            options.compressedContext ||
+            options.compressed_context
+        );
+        if (contextSummary) {
+            this.bufferContextSummary = contextSummary;
+            this._bufferSummaryVersion++;
+        }
 
         console.log(`[MemOS] 对话已缓存 (${this.roundCount}/${this.saveInterval} 轮)`);
 
         if (this.roundCount >= this.saveInterval && !this._saving) {
-            this._saving = true;
             console.log(`[MemOS] 达到 ${this.saveInterval} 轮，开始保存记忆...`);
-            try {
-                const toSave = [...this.conversationBuffer];
-                this.conversationBuffer = [];
-                this.roundCount = 0;
-                const result = await this.add(toSave);
-                return { status: 'saved', result };
-            } catch (error) {
-                console.error('MemOS 批量保存失败:', error.message);
-                return { status: 'error', message: error.message };
-            } finally {
-                this._saving = false;
-            }
+            return await this._startBufferSave('saved');
         }
 
         return { status: 'buffered', bufferedRounds: this.roundCount, remaining: this.saveInterval - this.roundCount };
     }
 
     async flushBuffer() {
-        if (!this.enabled || this.conversationBuffer.length === 0) return { status: 'empty' };
+        if (!this.enabled) return { status: 'empty' };
+
+        if (this._savePromise) {
+            const inFlightResult = await this._savePromise;
+            if (inFlightResult?.status === 'error') return inFlightResult;
+        }
+        if (this.conversationBuffer.length === 0) return { status: 'empty' };
 
         console.log(`[MemOS] 强制保存缓存的 ${this.roundCount} 轮对话...`);
-        try {
-            const result = await this.add(this.conversationBuffer);
-            const savedRounds = this.roundCount;
-            this.conversationBuffer = [];
-            this.roundCount = 0;
-            return { status: 'flushed', message: `已保存 ${savedRounds} 轮对话`, result };
-        } catch (error) {
-            console.error('MemOS 强制保存失败:', error.message);
-            return { status: 'error', message: error.message };
-        }
+        return await this._startBufferSave('flushed');
     }
 
     /** 将 ISO/时间戳格式化为中文本地日期时间，供 AI 理解「记忆发生时间」 */
