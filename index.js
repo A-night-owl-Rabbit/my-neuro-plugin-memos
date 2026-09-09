@@ -28,6 +28,48 @@ function isShortMemoryQuery(text) {
     return false;
 }
 
+function buildBackendEmbeddingConfig(cfg, backendCfg) {
+    const be = cfg && cfg.backend_embedding;
+    if (!be) return backendCfg;
+    const provider = be.provider === 'api' ? 'api' : 'local';
+    const baseUrl = String(be.api_base_url || 'https://api.siliconflow.cn/v1').trim();
+    const apiKey = String(be.api_key || '').trim();
+    backendCfg.embedding = backendCfg.embedding || {};
+    backendCfg.embedding.provider = provider;
+    backendCfg.embedding.api = {
+        ...(backendCfg.embedding.api || {}),
+        base_url: baseUrl,
+        model: String(be.embedding_model || 'BAAI/bge-m3').trim(),
+        api_key: apiKey
+    };
+    backendCfg.search = backendCfg.search || {};
+    backendCfg.search.reranker_provider = provider;
+    backendCfg.search.reranker_api = {
+        ...(backendCfg.search.reranker_api || {}),
+        base_url: baseUrl,
+        model: String(be.rerank_model || 'BAAI/bge-reranker-v2-m3').trim(),
+        api_key: apiKey
+    };
+    return backendCfg;
+}
+
+function describeEmbeddingModeMismatch(health, expectedProvider) {
+    const emb = health && health.embedding;
+    if (!emb) return null;
+    if (emb.warning) {
+        return { level: 'warn', text: `MemOS：${emb.warning}`, onceKey: `warning:${emb.warning}` };
+    }
+    if (emb.provider !== expectedProvider) {
+        const wantedName = expectedProvider === 'api' ? 'API 调用' : '本地模型';
+        const envNames = Array.isArray(emb.env_overrides) ? emb.env_overrides.filter(Boolean) : [];
+        const text = envNames.length
+            ? `后端由环境变量 ${envNames.join(', ')} 指定为 ${emb.provider}，WebUI 设置未生效`
+            : `MemOS 向量模式已改为「${wantedName}」，请在 WebUI 把记忆系统停止再启动后生效`;
+        return { level: 'warn', text, onceKey: `mismatch:${expectedProvider}:${emb.provider}:${envNames.join('|')}` };
+    }
+    return { level: 'info', text: `MemOS 向量模式: ${emb.provider}`, onceKey: null };
+}
+
 class MemosPlugin extends Plugin {
 
     async onInit() {
@@ -37,6 +79,11 @@ class MemosPlugin extends Plugin {
             similarityThreshold: this.client.similarityThreshold
         });
         this._cfg = cfg;
+        // 连续多少次提取失败后提醒一次；同一段连续失败只提醒一次，成功后重置
+        const threshold = Number(cfg.extraction_failure_notice_threshold);
+        this._noticeThreshold = Number.isFinite(threshold) && threshold >= 1 ? Math.floor(threshold) : 3;
+        this._noticeShownForStreak = false;
+        this._embeddingMismatchOnceKey = null;
     }
 
     async onStart() {
@@ -49,11 +96,105 @@ class MemosPlugin extends Plugin {
 
         const ok = await this.client.isAvailable();
         this.context.log('info', `MemOS 服务: ${ok ? '已连接' : '不可用（请确认 memos_system 是否启动）'}`);
+        if (ok) {
+            await this._checkBackendExtractionHealth();
+            await this._checkEmbeddingModeMismatch();
+        }
+    }
+
+    async onConfigChanged(newConfig) {
+        this._cfg = newConfig;
+        this._syncBackendConfig();
+        await this._checkEmbeddingModeMismatch();
+    }
+
+    async _checkEmbeddingModeMismatch() {
+        try {
+            const expected = (this._cfg && this._cfg.backend_embedding && this._cfg.backend_embedding.provider === 'api')
+                ? 'api'
+                : 'local';
+            const health = this.client && typeof this.client.fetchHealth === 'function'
+                ? await this.client.fetchHealth()
+                : null;
+            const result = describeEmbeddingModeMismatch(health, expected);
+            if (!result) return;
+            if (result.level === 'info') {
+                this.context.log('info', result.text);
+                return;
+            }
+            if (result.onceKey && this._embeddingMismatchOnceKey === result.onceKey) {
+                return;
+            }
+            this._embeddingMismatchOnceKey = result.onceKey;
+            this.context.log('warn', result.text);
+            this._notify(result.text);
+        } catch (err) {
+            this.context.log('warn', `核对 MemOS 向量模式失败（不影响运行）: ${err.message}`);
+        }
+    }
+
+    /** 启动时读取一次后端健康信息：提取链路处于 failing/disabled 或有告警时立刻提醒 */
+    async _checkBackendExtractionHealth() {
+        try {
+            const health = await this.client.fetchHealth();
+            if (!health) return;
+            const extraction = health.extraction || null;
+            const warnings = Array.isArray(health.warnings) ? health.warnings : [];
+            const status = extraction?.status;
+            if (status === 'failing' || status === 'disabled' || warnings.length > 0) {
+                const detail = warnings.length > 0 ? warnings.join('；') : `记忆提取状态 ${status}`;
+                this.context.log('warn', `MemOS 后端提示: ${detail}`);
+                this._notify(`MemOS 记忆提取异常：${detail}`);
+            } else if (status) {
+                this.context.log('info', `MemOS 记忆提取状态: ${status}${extraction?.last_ok_at ? `（上次成功 ${extraction.last_ok_at}）` : ''}`);
+            }
+        } catch (err) {
+            this.context.log('warn', `读取 MemOS 健康信息失败（不影响运行）: ${err.message}`);
+        }
+    }
+
+    _notify(text, durationMs = 6000) {
+        try {
+            if (typeof this.context.showSubtitle === 'function') {
+                this.context.showSubtitle(text, durationMs);
+            }
+        } catch (_) {
+            // 字幕只是提醒手段，失败不影响记忆功能
+        }
+    }
+
+    /** 处理一次缓冲保存的结果：连续失败达到阈值时提醒一次，成功后重置 */
+    _handleSaveResult(result) {
+        if (!result || typeof result !== 'object') return;
+        if (result.status === 'saved' || result.status === 'flushed') {
+            if (this._noticeShownForStreak) {
+                this.context.log('info', 'MemOS 记忆提取已恢复正常');
+            }
+            this._noticeShownForStreak = false;
+            return;
+        }
+        if (result.status === 'extraction_failed' || result.status === 'extraction_disabled') {
+            const streak = Number(result.failStreak) || 0;
+            const reason = result.extraction_error ? `，原因: ${result.extraction_error}` : '';
+            const retainInfo = result.retained
+                ? `，已保留 ${result.bufferedRounds} 轮对话等待重试`
+                : '，本批对话已放弃';
+            this.context.log('warn', `MemOS 记忆提取${result.status === 'extraction_disabled' ? '模型未配置' : '失败'}（连续 ${streak} 次${reason}${retainInfo}）`);
+            if (streak >= this._noticeThreshold && !this._noticeShownForStreak) {
+                this._noticeShownForStreak = true;
+                const hint = result.status === 'extraction_disabled'
+                    ? 'MemOS 记忆提取模型未配置，肥牛记不住最近的对话，请到插件配置里检查后端 LLM'
+                    : `MemOS 记忆提取已连续失败 ${streak} 次，肥牛可能记不住最近的对话，请检查后端模型配置或网络`;
+                this.context.log('warn', hint);
+                this._notify(hint);
+            }
+        }
     }
 
     async onStop() {
         if (this.client?.enabled) {
-            await this.client.flushBuffer();
+            const result = await this.client.flushBuffer();
+            this._handleSaveResult(result);
         }
     }
 
@@ -92,7 +233,9 @@ class MemosPlugin extends Plugin {
         this.client.addWithBuffer([
             { role: 'user', content: lastUser.content },
             { role: 'assistant', content: response.text }
-        ], { contextSummary }).catch(err => {
+        ], { contextSummary }).then(result => {
+            this._handleSaveResult(result);
+        }).catch(err => {
             this.context.log('error', `MemOS 保存对话失败: ${err.message}`);
         });
     }
@@ -201,6 +344,7 @@ class MemosPlugin extends Plugin {
             }
             backendCfg.search = backendCfg.search || {};
             backendCfg.search.similarity_threshold = cfg.similarity_threshold ?? backendCfg.search.similarity_threshold ?? 0.5;
+            buildBackendEmbeddingConfig(cfg, backendCfg);
 
             // Features
             if (cfg.backend_features) {
@@ -272,5 +416,13 @@ module.exports = MemosPlugin;
 // 挂成不可枚举：插件加载器会按自有可枚举属性推断插件类，可枚举会让它误选到这个函数
 Object.defineProperty(module.exports, 'isShortMemoryQuery', {
     value: isShortMemoryQuery,
+    enumerable: false
+});
+Object.defineProperty(module.exports, 'buildBackendEmbeddingConfig', {
+    value: buildBackendEmbeddingConfig,
+    enumerable: false
+});
+Object.defineProperty(module.exports, 'describeEmbeddingModeMismatch', {
+    value: describeEmbeddingModeMismatch,
     enumerable: false
 });

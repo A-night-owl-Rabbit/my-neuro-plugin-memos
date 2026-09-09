@@ -32,7 +32,7 @@
     "description": "记忆检索的最低相似度（0~1），低于此值不注入",
     "type": "float",
     "default": 0.6,
-    "value": 0.5
+    "value": 0.6
   },
   "auto_save": {
     "title": "自动保存对话",
@@ -48,6 +48,27 @@
     "default": 5,
     "value": 5
   },
+  "extraction_failure_notice_threshold": {
+    "title": "提取失败提醒阈值（次）",
+    "description": "后端记忆提取连续失败达到这个次数时，在屏幕上提醒一次；恢复成功后重新计数。",
+    "type": "int",
+    "default": 3,
+    "value": 3
+  },
+  "extraction_retry_enabled": {
+    "title": "提取失败时保留对话重试",
+    "description": "后端收到对话但提取失败（模型超时、未配置等）时，把这几轮对话留在缓冲里，退避 1~10 分钟后随下一批一起重试，避免对话白白丢掉。关闭则失败即放弃。",
+    "type": "bool",
+    "default": true,
+    "value": true
+  },
+  "max_buffered_rounds": {
+    "title": "重试缓冲上限（轮）",
+    "description": "提取持续失败时最多保留多少轮对话，超过就丢弃最旧的。默认 15 轮（3 倍保存间隔），不能小于保存间隔。",
+    "type": "int",
+    "default": 15,
+    "value": 15
+  },
   "backend_llm": {
     "title": "后端 LLM 配置",
     "description": "MemOS 后端用于总结对话、提取实体的 LLM（非对话模型）",
@@ -58,7 +79,7 @@
         "description": "后端记忆处理使用的 LLM 模型 旧版手填字段：只有提供商下拉留空、且地址/Key/模型都填全时才生效。建议改用提供商下拉选择。",
         "type": "string",
         "default": "deepseek-v4-pro",
-        "value": "DeepSeek-V4-pro",
+        "value": "deepseek-v4-pro",
         "deprecated": true
       },
       "api_key": {
@@ -66,7 +87,7 @@
         "description": "后端 LLM 的 API 密钥 旧版手填字段：只有提供商下拉留空、且地址/Key/模型都填全时才生效。建议改用提供商下拉选择。",
         "type": "string",
         "default": "",
-        "value": "RsCenterCH-CnBSu5qJDmi2dId35CWytvcRmeXU3H5HcyEpwuhGIBs=",
+        "value": "",
         "deprecated": true
       },
       "base_url": {
@@ -74,7 +95,7 @@
         "description": "后端 LLM 的 API 地址 旧版手填字段：只有提供商下拉留空、且地址/Key/模型都填全时才生效。建议改用提供商下拉选择。",
         "type": "string",
         "default": "https://api.deepseek.com",
-        "value": "https://agentrs.jd.com/api/saas/openai-u/v1",
+        "value": "https://api.deepseek.com",
         "deprecated": true
       },
       "max_tokens": {
@@ -89,7 +110,7 @@
         "description": "选了这里就优先用它（提供商在 WebUI「LLM 配置」页管理），旧的手填地址/Key/模型会被忽略；留空时才看旧手填字段，都没填就用主对话模型。",
         "type": "llm_provider",
         "default": "",
-        "value": "provider-13"
+        "value": ""
       },
       "model_id": {
         "title": "MemOS 主模型 模型",
@@ -97,7 +118,7 @@
         "type": "llm_model",
         "provider_field": "backend_llm.provider_id",
         "default": "",
-        "value": "gemini-3.7-flash-high"
+        "value": ""
       }
     }
   },
@@ -118,7 +139,7 @@
         "description": "备用 LLM 模型 旧版手填字段：只有提供商下拉留空、且地址/Key/模型都填全时才生效。建议改用提供商下拉选择。",
         "type": "string",
         "default": "google/gemini-3-pro-preview",
-        "value": "deepseek-v4-pro",
+        "value": "google/gemini-3-pro-preview",
         "deprecated": true
       },
       "api_key": {
@@ -134,7 +155,7 @@
         "description": "备用 LLM 的 API 地址 旧版手填字段：只有提供商下拉留空、且地址/Key/模型都填全时才生效。建议改用提供商下拉选择。",
         "type": "string",
         "default": "https://openrouter.ai/api/v1",
-        "value": "https://api.deepseek.com",
+        "value": "https://openrouter.ai/api/v1",
         "deprecated": true
       },
       "provider_id": {
@@ -142,7 +163,7 @@
         "description": "选了这里就优先用它（提供商在 WebUI「LLM 配置」页管理），旧的手填地址/Key/模型会被忽略；留空时才看旧手填字段，都没填就用主对话模型。",
         "type": "llm_provider",
         "default": "",
-        "value": "provider-8"
+        "value": ""
       },
       "model_id": {
         "title": "MemOS 备用模型 模型",
@@ -179,6 +200,58 @@
         "type": "bool",
         "default": true,
         "value": true
+      }
+    }
+  },
+  "backend_embedding": {
+    "title": "后端向量模型与重排序器",
+    "description": "记忆检索用的两个模型怎么跑。本地模型：装在显卡里，占约 6.5GB 显存，检索毫秒级。API 调用：用硅基流动免费模型 BAAI/bge-m3 与 BAAI/bge-reranker-v2-m3（不要选 Pro/），不占显存，每次检索多约 1 秒，记忆文本会发送到硅基流动。两种方式是同一个模型，切换不用重建记忆库。免费注册必须走插件 README 里的邀请链接。改动保存后，需要把记忆系统停止再启动才生效。",
+    "type": "object",
+    "fields": {
+      "provider": {
+        "title": "运行方式",
+        "description": "本地模型 / API 调用。向量模型和重排序模型一起切换。",
+        "type": "select",
+        "options": [
+          {
+            "value": "local",
+            "label": "本地模型（占显存，毫秒级）"
+          },
+          {
+            "value": "api",
+            "label": "API 调用（不占显存，慢约 1 秒）"
+          }
+        ],
+        "default": "local",
+        "value": "local"
+      },
+      "api_base_url": {
+        "title": "API 地址",
+        "description": "硅基流动国内节点 https://api.siliconflow.cn/v1（不要用 .com 国际节点）。只在「API 调用」时使用。",
+        "type": "string",
+        "default": "https://api.siliconflow.cn/v1",
+        "value": "https://api.siliconflow.cn/v1"
+      },
+      "api_key": {
+        "title": "API Key",
+        "description": "硅基流动的密钥。请先通过 README 邀请链接注册后，在控制台创建 Key 再粘贴到这里。留空时即使选了 API 调用，记忆系统也会按本地模型启动并提示。",
+        "type": "string",
+        "default": "",
+        "value": ""
+      },
+      "embedding_model": {
+        "title": "向量模型名（一般不用改）",
+        "description": "必须是与本地一致的 BAAI/bge-m3，否则新旧记忆的向量对不上；后端启动时会校验维度与向量空间，不一致会拒绝启用。只有换一家托管同一模型的服务商、且模型名不同时才改。",
+        "type": "string",
+        "default": "BAAI/bge-m3",
+        "value": "BAAI/bge-m3"
+      },
+      "rerank_model": {
+        "title": "重排序模型名（一般不用改）",
+        "description": "与本地一致的 BAAI/bge-reranker-v2-m3。",
+        "type": "string",
+        "default": "BAAI/bge-reranker-v2-m3",
+        "value": "BAAI/bge-reranker-v2-m3"
       }
     }
   },
