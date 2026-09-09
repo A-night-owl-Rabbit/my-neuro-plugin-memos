@@ -4,7 +4,7 @@
 
 让 AI 拥有跨会话的长期记忆能力，基于 MemOS 后端（Qdrant 向量 + NetworkX 知识图谱 + BM25 混合检索）。**你今天说过的事，明天、下周、甚至重装系统之后，她还记得。**
 
-> **显存不够 / 一边打游戏一边开肥牛？** 记忆检索用的两个模型可以改走硅基流动 **免费 API**，不再占约 6.5GB 显存。注册必须点这个邀请链接，不要直接打开官网首页：[https://cloud.siliconflow.cn/i/poqaI6Hn](https://cloud.siliconflow.cn/i/poqaI6Hn)。用免费模型 `BAAI/bge-m3` 和 `BAAI/bge-reranker-v2-m3`，**不要选 `Pro/` 开头的收费版**。详细步骤见下面「用免费 API 跑向量和重排序」。
+> **显存不够 / 一边打游戏一边开肥牛？** 记忆检索用的两个模型可以改走硅基流动 **免费 API**，不再占约 6.5GB 显存。注册必须点这个链接：[https://cloud.siliconflow.cn/i/poqaI6Hn](https://cloud.siliconflow.cn/i/poqaI6Hn)。用免费模型 `BAAI/bge-m3` 和 `BAAI/bge-reranker-v2-m3`，**不要选 `Pro/` 开头的收费版**。详细步骤见下面「用免费 API 跑向量和重排序」。
 
 ## 这是什么？（给完全没接触过的小白）
 
